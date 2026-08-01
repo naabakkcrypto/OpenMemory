@@ -546,6 +546,14 @@ export async function create_single_waypoint(
     let best: { id: string; similarity: number } | null = null;
     for (const mem of mems) {
         if (mem.id === new_id || !mem.mean_vec) continue;
+        if (
+            project_id &&
+            mem.project_id !== project_id &&
+            mem.project_id !== "system_global" &&
+            mem.project_id != null
+        ) {
+            continue;
+        }
         const ex_mean = buf_to_vec(mem.mean_vec);
         const sim = cos_sim(new Float32Array(new_mean), ex_mean);
         if (!best || sim > best.similarity) {
@@ -587,6 +595,18 @@ export async function create_inter_mem_waypoints(
     const vecs = await vector_store.getVectorsBySector(prim_sec);
     for (const vr of vecs) {
         if (vr.id === new_id) continue;
+        if (user_id || project_id) {
+            const memory = await q.get_mem.get(vr.id);
+            if (
+                !memory ||
+                !matches_waypoint_tenant(memory, {
+                    user_id: user_id || undefined,
+                    project_id: project_id || undefined,
+                })
+            ) {
+                continue;
+            }
+        }
         const ex_vec = vr.vector;
         const sim = cos_sim(
             new Float32Array(new_vec),
@@ -624,6 +644,18 @@ export async function create_contextual_waypoints(
     const now = Date.now();
     for (const rel_id of rel_ids) {
         if (mem_id === rel_id) continue;
+        if (user_id || project_id) {
+            const related = await waypoint_destination_memory(rel_id);
+            if (
+                !related ||
+                !matches_waypoint_tenant(related, {
+                    user_id: user_id || undefined,
+                    project_id: project_id || undefined,
+                })
+            ) {
+                continue;
+            }
+        }
         const existing = await q.get_waypoint.get(mem_id, rel_id);
         if (existing) {
             const new_wt = Math.min(1.0, existing.weight + 0.1);
@@ -641,9 +673,38 @@ export async function create_contextual_waypoints(
         }
     }
 }
+type WaypointTenantFilter = {
+    user_id?: string;
+    project_id?: string;
+};
+
+function matches_waypoint_tenant(
+    row: { user_id?: string | null; project_id?: string | null },
+    filter?: WaypointTenantFilter,
+): boolean {
+    if (filter?.user_id && row.user_id !== filter.user_id) return false;
+    if (
+        filter?.project_id &&
+        row.project_id !== filter.project_id &&
+        row.project_id !== "system_global" &&
+        row.project_id != null
+    ) {
+        return false;
+    }
+    return true;
+}
+
+async function waypoint_destination_memory(id: string): Promise<any> {
+    const direct = await q.get_mem.get(id);
+    if (direct) return direct;
+    const separator = id.indexOf(":");
+    return separator > 0 ? q.get_mem.get(id.slice(0, separator)) : null;
+}
+
 export async function expand_via_waypoints(
     init_res: string[],
     max_exp: number = 10,
+    tenant?: WaypointTenantFilter,
 ): Promise<Array<{ id: string; weight: number; path: string[] }>> {
     const exp: Array<{ id: string; weight: number; path: string[] }> = [];
     const vis = new Set<string>();
@@ -658,6 +719,18 @@ export async function expand_via_waypoints(
         const neighs = await q.get_neighbors.all(cur.id);
         for (const neigh of neighs) {
             if (vis.has(neigh.dst_id)) continue;
+            if (tenant && !matches_waypoint_tenant(neigh, tenant)) continue;
+            if (tenant) {
+                const destination = await waypoint_destination_memory(
+                    neigh.dst_id,
+                );
+                if (
+                    !destination ||
+                    !matches_waypoint_tenant(destination, tenant)
+                ) {
+                    continue;
+                }
+            }
 
             const neigh_wt = Math.min(1.0, Math.max(0, neigh.weight || 0));
             const exp_wt = cur.weight * neigh_wt * 0.8;
@@ -884,7 +957,10 @@ export async function hsg_query(
         for (const r of Object.values(sr)) for (const x of r) ids.add(x.id);
         const exp = high_conf
             ? []
-            : await expand_via_waypoints(Array.from(ids), k * 2);
+            : await expand_via_waypoints(Array.from(ids), k * 2, {
+                  user_id: f?.user_id,
+                  project_id: f?.project_id,
+              });
         for (const e of exp) ids.add(e.id);
 
         let keyword_scores = new Map<string, number>();
@@ -1137,7 +1213,11 @@ export async function add_hsg_memory(
     deduplicated?: boolean;
 }> {
     const simhash = compute_simhash(content);
-    const existing = await q.get_mem_by_simhash.get(simhash);
+    const existing = await q.get_mem_by_simhash.get(
+        simhash,
+        user_id || "anonymous",
+        project_id || null,
+    );
     if (existing && hamming_dist(simhash, existing.simhash) <= 3) {
         const now = Date.now();
         const boosted_sal = Math.min(1, existing.salience + 0.15);

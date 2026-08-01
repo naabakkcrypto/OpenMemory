@@ -156,6 +156,42 @@ describe("MCP per-tenant scoping", () => {
         expect(alice_list.length).toBe(1);
     });
 
+    it("project storage deduplicates only inside the exact project tenant", async () => {
+        const { client } = await connect_client(undefined);
+        const content =
+            "Shared wording that remains an independent project decision.";
+        const first = parse_store(
+            await client.callTool({
+                name: "openmemory_store_project",
+                arguments: {
+                    content,
+                    project_id: "proj_aaaaaaaaaaaaaaaa",
+                    user_id: "proj_aaaaaaaaaaaaaaaa",
+                },
+            }),
+        );
+        const second = parse_store(
+            await client.callTool({
+                name: "openmemory_store_project",
+                arguments: {
+                    content,
+                    project_id: "proj_bbbbbbbbbbbbbbbb",
+                    user_id: "proj_bbbbbbbbbbbbbbbb",
+                },
+            }),
+        );
+
+        expect(first.id).toBeTruthy();
+        expect(second.id).toBeTruthy();
+        expect(second.id).not.toBe(first.id);
+        expect((await q.get_mem.get(first.id!)).project_id).toBe(
+            "proj_aaaaaaaaaaaaaaaa",
+        );
+        expect((await q.get_mem.get(second.id!)).project_id).toBe(
+            "proj_bbbbbbbbbbbbbbbb",
+        );
+    });
+
     it("openmemory_store rejects a user_id arg that disagrees with the tenant", async () => {
         const { client } = await connect_client(T_ALICE);
         const result: any = await client.callTool({

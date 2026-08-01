@@ -3,7 +3,7 @@ process.env.OM_METADATA_BACKEND = "sqlite";
 process.env.OM_VECTOR_BACKEND = "sqlite";
 
 import { describe, it, expect, beforeAll } from "vitest";
-import { run_async } from "../src/core/db";
+import { get_async, run_async } from "../src/core/db";
 import {
     insert_fact,
     get_fact_by_id_for_user,
@@ -148,6 +148,32 @@ describe("temporal_graph per-tenant isolation", () => {
             include_historical: true,
         });
         expect(noFilter.length).toBe(4);
+    });
+
+    it("a project-specific write does not invalidate a visible global fact", async () => {
+        const tenant = "tenant-write-scope";
+        const globalId = await insert_fact({
+            subject: "write-scope",
+            predicate: "status",
+            object: "global",
+            user_id: tenant,
+            project_id: "system_global",
+            valid_from: new Date(1_000),
+        });
+        await insert_fact({
+            subject: "write-scope",
+            predicate: "status",
+            object: "project",
+            user_id: tenant,
+            project_id: "project-a",
+            valid_from: new Date(2_000),
+        });
+
+        const global = (await get_async(
+            "SELECT valid_to FROM temporal_facts WHERE id = ?",
+            [globalId],
+        )) as { valid_to: number | null };
+        expect(global.valid_to).toBeNull();
     });
 
     it("migrate quarantines NULL user_id rows once and is idempotent", async () => {

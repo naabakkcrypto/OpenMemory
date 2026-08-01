@@ -28,7 +28,13 @@ type q_type = {
     upd_mem_with_sector: { run: (...p: any[]) => Promise<void> };
     del_mem: { run: (...p: any[]) => Promise<void> };
     get_mem: { get: (id: string) => Promise<any> };
-    get_mem_by_simhash: { get: (simhash: string) => Promise<any> };
+    get_mem_by_simhash: {
+        get: (
+            simhash: string,
+            user_id: string,
+            project_id: string | null,
+        ) => Promise<any>;
+    };
     all_mem: { all: (limit: number, offset: number) => Promise<any[]> };
     all_mem_by_sector: {
         all: (sector: string, limit: number, offset: number) => Promise<any[]>;
@@ -347,10 +353,10 @@ if (is_pg) {
             get: (id) => get_async(`select * from ${m} where id=$1`, [id]),
         },
         get_mem_by_simhash: {
-            get: (simhash) =>
+            get: (simhash, user_id, project_id) =>
                 get_async(
-                    `select * from ${m} where simhash=$1 order by salience desc limit 1`,
-                    [simhash],
+                    `select * from ${m} where simhash=$1 and user_id=$2 and project_id is not distinct from $3 order by salience desc limit 1`,
+                    [simhash, user_id, project_id],
                 ),
         },
         all_mem: {
@@ -405,7 +411,7 @@ if (is_pg) {
         get_neighbors: {
             all: (src) =>
                 all_async(
-                    `select dst_id,weight from ${w} where src_id=$1 order by weight desc`,
+                    `select dst_id,weight,user_id,project_id from ${w} where src_id=$1 order by weight desc`,
                     [src],
                 ),
         },
@@ -759,10 +765,10 @@ if (is_pg) {
             get: (id) => one("select * from memories where id=?", [id]),
         },
         get_mem_by_simhash: {
-            get: (simhash) =>
+            get: (simhash, user_id, project_id) =>
                 one(
-                    "select * from memories where simhash=? order by salience desc limit 1",
-                    [simhash],
+                    "select * from memories where simhash=? and user_id=? and project_id IS ? order by salience desc limit 1",
+                    [simhash, user_id, project_id],
                 ),
         },
         all_mem: {
@@ -817,7 +823,7 @@ if (is_pg) {
         get_neighbors: {
             all: (src) =>
                 many(
-                    "select dst_id,weight from waypoints where src_id=? order by weight desc",
+                    "select dst_id,weight,user_id,project_id from waypoints where src_id=? order by weight desc",
                     [src],
                 ),
         },

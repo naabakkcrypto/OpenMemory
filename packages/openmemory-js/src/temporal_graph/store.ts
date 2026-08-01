@@ -78,18 +78,16 @@ const _insert_fact_impl = async (
     const now = Date.now();
     const valid_from_ts = valid_from.getTime();
 
+    const exact_scope = is_pg
+        ? " AND user_id IS NOT DISTINCT FROM ? AND project_id IS NOT DISTINCT FROM ?"
+        : " AND user_id IS ? AND project_id IS ?";
     const existing = await all_async(
         `
         SELECT id, valid_from FROM temporal_facts
-        WHERE subject = ? AND predicate = ? AND valid_to IS NULL${user_id ? " AND user_id = ?" : ""}${project_id ? " AND (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)" : ""}
+        WHERE subject = ? AND predicate = ? AND valid_to IS NULL${exact_scope}
         ORDER BY valid_from DESC
     `,
-        [
-            subject,
-            predicate,
-            ...(user_id ? [user_id] : []),
-            ...(project_id ? [project_id] : []),
-        ],
+        [subject, predicate, user_id || null, project_id || null],
     );
 
     for (const old of existing) {
